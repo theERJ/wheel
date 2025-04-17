@@ -1,0 +1,455 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row =>
+                    row.some(cell => cell !== '' && cell !== null && cell !== undefined)
+                );
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wheel Spinner</title>
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+        }
+        #wheelcanvasOuter {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            min-width: 300px;
+            margin: 0 auto;
+            aspect-ratio: 1 / 1;
+        }
+        canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #wheelcanvas {
+            z-index: 0;
+        }
+        #wheelcanvastop {
+            z-index: 1;
+        }
+        .input-group {
+            display: flex;
+            margin: 5px 0;
+            justify-content: center;
+            align-items: center;
+        }
+        .form-control {
+            width: 200px;
+            padding: 5px;
+            margin-right: 5px;
+        }
+        .btn {
+            padding: 5px 10px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+        }
+        .btn:hover {
+            background-color: #0056b3;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+        }
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        #wheelBuilder {
+            font-size: 24px;
+            margin: 20px 0;
+        }
+        .form-section {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        @media (max-width: 600px) {
+            .form-control {
+                width: 150px;
+            }
+            #wheelcanvasOuter {
+                max-width: 400px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h2>Wheel Spinner</h2>
+    <div id="wheelcanvasOuter">
+        <canvas id="wheelcanvas"></canvas>
+        <canvas id="wheelcanvastop" onclick="spin();"></canvas>
+    </div>
+    <button class="btn" onclick="spin();">Spin Wheel</button>
+    <div class="wheelBuilder" id="wheelBuilder">Wheel Builder</div>
+    <div class="form-section">
+        <form name="input" action="wheel.html" method="get">
+            <div>Choices (enter up to 100 choices):</div>
+            <div id="txtChoices"></div>
+            <button type="button" class="btn" onclick="addElement();">Add Choice</button>
+            <button type="button" class="btn btn-danger" onclick="clearChoices();">Clear Choices</button>
+            <div style="margin-top:10px;">
+                Title: <input type="text" name="t" class="form-control" placeholder="Wheel Title (Optional)">
+            </div>
+            <div style="margin-top:10px;">
+                <input type="checkbox" name="remove" value="1" checked> Remove choice after it is landed on
+            </div>
+            <div style="margin-top:10px;">
+                Seconds to Spin: <input type="text" name="time" class="form-control" style="width:50px;" value="3">
+            </div>
+            <div style="margin-top:10px;">
+                Wheel Diameter (pixels, 100-3000): <input type="text" name="width" class="form-control" style="width:50px;" value="800">
+            </div>
+            <input type="hidden" name="col" value="pastel">
+            <input type="submit" class="btn" value="Apply Wheel Changes">
+        </form>
+    </div>
+
+    <script>
+        // Wheel configuration
+        var colors = ["#bc81b7", "#f9b48a", "#83cab8", "#db87b9", "#fff68f", "#6acbde", "#ea91bd", "#d5e286",
+                      "#71abdb", "#f497a9", "#b6d884", "#7e8ac6", "#f8a796", "#FFFFFF"];
+        var restaurants = [];
+        var choiceTextSize = [];
+        var weights = [];
+        var canvasWidth = 800;
+        var wheelSize = canvasWidth;
+        var wheelRadius = wheelSize * 0.5;
+        var outsideRadius = wheelRadius;
+        var textRadius = wheelRadius * 0.9;
+        var insideRadius = wheelRadius * 0.1;
+        var startAngle = 0;
+        var arc = Math.PI / 10;
+        var spinTimeout = null;
+        var spinAngleStart = 0;
+        var spinTime = 0;
+        var spinTimeTotal = 3000;
+        var ctx, ctxTop;
+        var numoptions = 0;
+        var numOptionsWeighted = 0;
+
+        // Form handling
+        var intTextBox = 0;
+        var choiceCount = 0;
+
+        // Initialize wheel with URL parameters
+        function initWheel() {
+            var params = new URLSearchParams(window.location.search);
+            var title = params.get('t') || '';
+            var remove = params.get('remove') === '1';
+            var time = parseFloat(params.get('time')) || 3;
+            var width = parseInt(params.get('width')) || 800;
+            width = Math.max(100, Math.min(3000, width));
+            document.querySelector('input[name="t"]').value = title;
+            document.querySelector('input[name="remove"]').checked = remove;
+            document.querySelector('input[name="time"]').value = time;
+            document.querySelector('input[name="width"]').value = width;
+            document.querySelector('h2').textContent = title || 'Wheel Spinner';
+            spinTimeTotal = time * 1000;
+            canvasWidth = width;
+            restaurants = [];
+            for (let i = 1; i <= 100; i++) {
+                let choice = params.get('c' + i);
+                if (choice) {
+                    restaurants.push(choice);
+                    addChoiceElement(choice, i);
+                }
+            }
+            if (restaurants.length === 0) {
+                restaurants = ["Choice 1", "Choice 2", "Choice 3"];
+                for (let i = 1; i <= 3; i++) {
+                    addChoiceElement(restaurants[i-1], i);
+                }
+            }
+            numoptions = restaurants.length;
+            setCanvasSize();
+            setWeightedVariables();
+            setChoiceFontSizes();
+            drawRouletteWheel();
+        }
+
+        function setCanvasSize() {
+            var outer = document.getElementById('wheelcanvasOuter');
+            var canvas = document.getElementById('wheelcanvas');
+            var canvasTop = document.getElementById('wheelcanvastop');
+            var width = outer.clientWidth;
+            canvas.width = width;
+            canvas.height = width;
+            canvasTop.width = width;
+            canvasTop.height = width;
+            wheelSize = width;
+            wheelRadius = wheelSize * 0.5;
+            outsideRadius = wheelRadius;
+            textRadius = wheelRadius * 0.9;
+            insideRadius = wheelRadius * 0.1;
+        }
+
+        function addChoiceElement(value, id) {
+            intTextBox = Math.max(intTextBox, id);
+            choiceCount++;
+            var contentID = document.getElementById('txtChoices');
+            var newTBDiv = document.createElement('div');
+            newTBDiv.setAttribute('id', 'strText' + id);
+            newTBDiv.setAttribute('class', 'input-group');
+            newTBDiv.innerHTML = `<input onfocus="addElementIfNeeded(${id})" class="form-control" type="text" name="c${id}" value="${value || ''}"><button type="button" class="btn btn-danger" onclick="removeElementID(${id});">X</button>`;
+            contentID.appendChild(newTBDiv);
+        }
+
+        function addElement() {
+            if (choiceCount < 100 && intTextBox < 200) {
+                intTextBox++;
+                choiceCount++;
+                addChoiceElement('', intTextBox);
+            } else {
+                alert("Maximum 100 choices allowed.");
+            }
+        }
+
+        function addElementIfNeeded(id) {
+            if (id == intTextBox) {
+                addElement();
+            }
+        }
+
+        function removeElementID(cnum) {
+            var contentID = document.getElementById('txtChoices');
+            var element = document.getElementById('strText' + cnum);
+            if (element) {
+                contentID.removeChild(element);
+                choiceCount--;
+                updateWheel();
+            }
+        }
+
+        function clearChoices() {
+            document.getElementById('txtChoices').innerHTML = '';
+            intTextBox = 0;
+            choiceCount = 0;
+            restaurants = [];
+            numoptions = 0;
+            drawRouletteWheel();
+        }
+
+        function updateWheel() {
+            restaurants = [];
+            for (let i = 1; i <= intTextBox; i++) {
+                let input = document.querySelector(`input[name="c${i}"]`);
+                if (input && input.value.trim()) {
+                    restaurants.push(input.value.trim());
+                }
+            }
+            numoptions = restaurants.length;
+            setWeightedVariables();
+            setChoiceFontSizes();
+            drawRouletteWheel();
+        }
+
+        // Wheel mechanics
+        function setWeightedVariables() {
+            numOptionsWeighted = restaurants.length;
+            arc = Math.PI / (numOptionsWeighted / 2);
+        }
+
+        function setChoiceFontSizes() {
+            var canvas = document.getElementById("wheelcanvas");
+            if (canvas.getContext) {
+                ctx = canvas.getContext("2d");
+                choiceTextSize = [];
+                for (var i = 0; i < numoptions; i++) {
+                    var text = restaurants[i];
+                    ctx.font = 'bold 18px sans-serif';
+                    var textHWidth = ctx.measureText(text).width;
+                    if (textHWidth > textRadius - 30) {
+                        ctx.font = 'bold 15px sans-serif';
+                        textHWidth = ctx.measureText(text).width;
+                        choiceTextSize.push(textHWidth > textRadius - 30 ? "12" : "15");
+                    } else {
+                        choiceTextSize.push("18");
+                    }
+                }
+            }
+        }
+
+        function drawRouletteWheel() {
+            var canvas = document.getElementById("wheelcanvas");
+            if (canvas.getContext) {
+                ctx = canvas.getContext("2d");
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.strokeStyle = "black";
+                ctx.lineWidth = 0;
+                ctx.translate(canvas.width / 2, canvas.height / 2);
+                ctx.font = 'bold 12px sans-serif';
+                var weightedIndex = 0;
+
+                for (var i = 0; i < numoptions; i++) {
+                    var weightedArc = arc;
+                    var angle = startAngle + weightedIndex * arc;
+                    ctx.fillStyle = colors[i % colors.length];
+                    ctx.beginPath();
+                    var endAngle = angle + weightedArc;
+                    if (endAngle > 6.282 && endAngle < 6.284) {
+                        endAngle = 6.282;
+                    }
+                    ctx.arc(0, 0, outsideRadius, angle, endAngle, false);
+                    ctx.arc(0, 0, insideRadius, endAngle, angle, true);
+                    ctx.fill();
+                    ctx.save();
+                    ctx.fillStyle = "black";
+                    var angHalfArc = angle + weightedArc * 0.5 - 0.04;
+                    ctx.translate(Math.cos(angHalfArc) * textRadius, Math.sin(angHalfArc) * textRadius);
+                    ctx.rotate(angHalfArc + Math.PI);
+                    var text = restaurants[i];
+                    ctx.font = 'bold ' + choiceTextSize[i] + 'px sans-serif';
+                    var textHWidth = ctx.measureText(text).width;
+                    if (textHWidth > textRadius - 30) {
+                        text = text.substring(0, 27) + "...";
+                    }
+                    ctx.fillText(text, 0, 0);
+                    weightedIndex++;
+                    ctx.restore();
+                }
+                drawArrow();
+            }
+        }
+
+        function drawArrow() {
+            var canvas = document.getElementById("wheelcanvastop");
+            if (canvas.getContext) {
+                ctxTop = canvas.getContext("2d");
+                ctxTop.clearRect(0, 0, canvas.width, canvas.height);
+                ctxTop.fillStyle = "red";
+                ctxTop.beginPath();
+                ctxTop.moveTo(canvas.width / 2 - 10, 10);
+                ctxTop.lineTo(canvas.width / 2 + 10, 10);
+                ctxTop.lineTo(canvas.width / 2, 30);
+                ctxTop.closePath();
+                ctxTop.fill();
+            }
+        }
+
+        function spin() {
+            if (numoptions === 0) {
+                return alert("Please add at least one choice.");
+            }
+            spinAngleStart = Math.random() * 30 + 20;
+            spinTime = 0;
+            rotateWheel();
+        }
+
+        function rotateWheel() {
+            spinTime += 30;
+            if (spinTime >= spinTimeTotal) {
+                stopRotateWheel();
+                return;
+            }
+            var spinAngle = spinAngleStart - easeOut(spinTime, 0, spinAngleStart, spinTimeTotal);
+            startAngle += (spinAngle * Math.PI / 180);
+            drawRouletteWheel();
+            spinTimeout = setTimeout(rotateWheel, 30);
+        }
+
+        function stopRotateWheel() {
+            clearTimeout(spinTimeout);
+            var choice = getCurrentChoiceWithWeights();
+            var text = choice.text;
+            var index = choice.index;
+            var canvasTop = document.getElementById("wheelcanvastop");
+            if (canvasTop.getContext) {
+                ctxTop = canvasTop.getContext("2d");
+                ctxTop.font = 'bold 30px sans-serif';
+                var textHWidth = ctxTop.measureText(text).width * 0.5;
+                if (textHWidth > wheelRadius) {
+                    ctxTop.font = 'bold 12px sans-serif';
+                    textHWidth = ctxTop.measureText(text).width * 0.5;
+                }
+                ctxTop.fillStyle = "white";
+                ctxTop.fillText(text, canvasWidth / 2 - textHWidth, canvasWidth / 2 + 10);
+            }
+            if (document.querySelector('input[name="remove"]').checked && restaurants.length > 1) {
+                restaurants.splice(index, 1);
+                choiceTextSize.splice(index, 1);
+                numoptions--;
+                setWeightedVariables();
+                drawRouletteWheel();
+                updateFormInputs();
+            }
+        }
+
+        function updateFormInputs() {
+            var contentID = document.getElementById('txtChoices');
+            contentID.innerHTML = '';
+            intTextBox = 0;
+            choiceCount = 0;
+            restaurants.forEach((choice, index) => {
+                addChoiceElement(choice, index + 1);
+            });
+        }
+
+        function getCurrentChoiceWithWeights() {
+            var degrees = startAngle * 180 / Math.PI + 90;
+            var arcd = arc * 180 / Math.PI;
+            var weightedIndex = 0;
+            for (var i = 0; i < numoptions; i++) {
+                var weightedArc = arcd;
+                if (degrees >= weightedIndex * arcd && degrees <= (weightedIndex + 1) * arcd) {
+                    return { text: restaurants[i], index: i };
+                }
+                weightedIndex++;
+            }
+            return { text: restaurants[0], index: 0 };
+        }
+
+        function easeOut(t, b, c, d) {
+            var ts = (t /= d) * t;
+            var tc = ts * t;
+            return b + c * (tc + -3 * ts + 3 * t);
+        }
+
+        // Resize canvas on window resize
+        window.addEventListener('resize', () => {
+            setCanvasSize();
+            setChoiceFontSizes();
+            drawRouletteWheel();
+        });
+
+        // Initialize
+        initWheel();
+    </script>
+</body>
+</html>
